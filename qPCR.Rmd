@@ -1,0 +1,116 @@
+---
+title: "qPCR data analysis"
+author: "Darya Vanichkina"
+date: "05/03/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(openxlsx)
+library(tidyverse)
+
+```
+
+## Load the data
+
+As the first step, we load the data from an xlsx Excel file using the openxlsx library. 
+
+I am reading each of the sheets I am interested in into variables with meaningful names. I use the startRow parameter to specify that I want to start reading in the data starting from row 36 (i.e. I don't want to read any of the metadata above). 
+
+Note: make sure you use the latest version (openxlsx_4.0.17+) of this library in order to have the same parameters available to you as I have used. 
+
+```{r LoadData}
+sample_setup <- readWorkbook("qPCR_sample.xlsx",sheet = "Sample Setup", startRow = 36, colNames = TRUE, rowNames = FALSE, detectDates = FALSE, skipEmptyRows = TRUE,skipEmptyCols = TRUE)
+
+amplification_data <- readWorkbook("qPCR_sample.xlsx",sheet = "Amplification Data", startRow = 36, colNames = TRUE, rowNames = FALSE, detectDates = FALSE, skipEmptyRows = TRUE, na.strings = "",skipEmptyCols = TRUE)
+
+qPCR_results <- readWorkbook("qPCR_sample.xlsx",sheet = "Results", startRow = 36, colNames = TRUE, rowNames = FALSE, detectDates = FALSE, skipEmptyRows = TRUE, skipEmptyCols = TRUE, na.strings = "Undetermined")
+
+sample_annotation <- readWorkbook("qPCR_sample.xlsx",sheet = "Sample Annotation", startRow = 1, colNames = TRUE, rowNames = FALSE, detectDates = FALSE, skipEmptyRows = TRUE, skipEmptyCols = TRUE)
+
+```
+
+Next, I try to reproduce what you would have seen on the qPCR machine - the amplification curves observed for each well. This allows me to see that there is actually one well which is an outlier - it has much higher Rn values even at baseline than all of the other wells. It may be prudent to exclude this well, although for this analysis I won't, since it does demonstrate a similar curve as all the other wells. However, I will show how to identify this well based on what we see in the plot.
+
+
+```{r PlotAmplif}
+amplification_data_complete <- amplification_data[complete.cases(amplification_data),]
+
+# look at all the wells
+ggplot(amplification_data_complete, aes(x = Cycle, y = Rn, colour = Well)) + geom_point() + theme_minimal()
+
+# zoom into wells 30:40
+amplification_data_complete %>% filter(Well %in% 30:40) %>% ggplot(., aes(x = Cycle, y = Rn, colour = Well)) + geom_point() + theme_minimal()
+
+# zoom into well 30:34, and show it as a curve, not a series of dots
+amplification_data_complete %>% filter(Well %in% 30:34) %>% ggplot(., aes(x = Cycle, y = Rn, colour = as.factor(Well))) + geom_path() + theme_minimal() + scale_color_brewer(palette = "Set1")
+
+# identify the outlier - it's well 257, Gene 8
+amplification_data_complete %>% filter(Cycle == 1) %>% filter(Rn > 2.5)
+amplification_data_complete %>% filter(Well %in% 257) %>% ggplot(., aes(x = Cycle, y = Rn, colour = as.factor(Well))) + geom_path() + theme_minimal() + scale_color_brewer(palette = "Set1")
+```
+I could have then used subset data frame to exluce this well. 
+
+
+Next, define the standard functions for quantitating qPCR data using the [delta delta Ct method](http://bitesizebio.com/24894/4-easy-steps-to-analyze-your-qpcr-data-using-double-delta-ct-analysis/), and the error for this method.
+
+
+```{r DefineFunctions}
+deltadeltact <- function(geneofinterestMean , controlMean){
+  return(2 ^ - (geneofinterestMean - controlMean))
+}
+
+deltadeltact_error <- function(geneofinterestMean, controlMean, geneofinterestSD, controlSD){
+  cterror <- 2 ^-(geneofinterestMean - controlMean + sqrt(geneofinterestSD^2 + controlSD^2))
+  return(deltadeltact(geneofinterestMean, controlMean) - cterror)
+}
+
+```
+
+Now merge the tables that we generated from the different sheets of the spreadsheet:
+
+```{r MergeTables}
+qPCR_results_anno <- merge.data.frame(qPCR_results, sample_annotation, by.x = "Sample.Name", by.y = "Sample")
+# dplyr syntax
+qPCR_results_anno2 <- inner_join(qPCR_results, sample_annotation, by = c("Sample.Name" = "Sample"))  %>% select(`Target.Name`, `siRNA`, `CT`, `Time`)
+qPCR_results_anno2 <- qPCR_results_anno2[complete.cases(qPCR_results_anno2),]
+```
+
+Filter, do the math, and plot the results.
+
+
+```{r NowPlot}
+qPCR_results_anno2_genes <- qPCR_results_anno2 %>% 
+  filter(Target.Name != "ReferenceGene") %>% # select the non-refernce gene values
+  unite(id, Target.Name, siRNA, Time) %>%  # paste Target.Name,siRNA and Time columns into one column called id
+  group_by(id) %>% # group by this id column
+  summarise( mean_genes = mean(CT), sd_genes = sd(CT)) %>% # make new columns that have the mean and standard deviation of CT for the three replicates for each id 
+  separate(id,  into = c("Gene", "siRNA", "Time") ,sep = "_") %>% # now separate the id column into Gene, siRNA, Time 
+  unite(id, siRNA, Time) # then unite siRNA and Time into a new column called id
+
+
+# same as above except only looking at control genes
+qPCR_results_anno2_control <- qPCR_results_anno2 %>% 
+  filter(Target.Name == "ReferenceGene") %>% 
+  unite(id, Target.Name, siRNA, Time) %>% 
+  group_by(id) %>% 
+  summarise( mean_genes = mean(CT), sd_genes = sd(CT)) %>% 
+  separate(id,  into = c("Gene", "siRNA", "Time") ,sep = "_") %>% 
+  unite(id, siRNA, Time) %>% select(id, mean_control = mean_genes , sd_control = sd_genes)
+
+
+qPCR_processed_table <- merge.data.frame(qPCR_results_anno2_genes, qPCR_results_anno2_control, by = "id", all.x = TRUE, all.y = TRUE) %>% # merge results for control gene and genes of interest
+  separate(id,  into = c("siRNA", "Time") ,sep = "_", remove = FALSE) %>% # separate the id column into siRNA and Time 
+  group_by(siRNA, Time, Gene) %>% # group the data by siRNA, Time and Gene
+  summarise(ddCt = deltadeltact(mean_genes, mean_control), ddCtError = deltadeltact_error(mean_genes, mean_control, sd_genes, sd_control)) # use the summarise function to apply our custom defined functions deltadeltact and deltadeltact_error to the data grouped by siRNA, time and gene
+  
+
+# now plot
+
+qPCR_processed_table %>% 
+  ggplot(.,aes(x = siRNA, y = ddCt, fill = siRNA)) + geom_bar(stat = "identity") + facet_grid(Gene ~ Time, scales = "free") + theme_bw() + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + geom_errorbar(aes(ymin=ddCt-ddCtError, ymax=ddCt + ddCtError), width=.1,  position=position_dodge(.9))
+
+```
+
+
