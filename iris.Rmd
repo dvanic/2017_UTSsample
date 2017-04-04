@@ -1,0 +1,52 @@
+---
+title: "Iris data demo"
+author: "Darya Vanichkina"
+date: "05/03/2017"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+iris is the famous data set from Fisher, which has the measurements in centimeters of the variables sepal length and width and petal length and width, respectively, for 50 flowers from each of 3 species of iris. The species are Iris setosa, versicolor, and virginica.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, tidy=TRUE, tidy.opts=list(width.cutoff=60))
+library("dunn.test")
+```
+
+```{r}
+library(tidyverse)
+ggplot(data=iris, aes(x=Species, y=Sepal.Length)) + geom_boxplot() + geom_point(aes(colour = Species), position = position_jitter(width = 0.2)) + theme_minimal()
+ 
+anova(lm(iris$Sepal.Length ~ iris$Species))
+
+# Replicating prism
+kruskal.test(iris$Sepal.Length ~ iris$Species)
+# is a nonparametric test that compares three or more unmatched groups.
+# Prism only offers Dunn's post test, either to compare all pairs of groups, or just selected pairs.
+library(dunn.test)
+dunn.test(iris$Sepal.Length, iris$Species,  kw=TRUE, method = "bonferroni")
+# unlike prism, we're doing MTC here :)
+
+```
+
+The output following the Kruskal-Wallis test provides all possible pairwise comparisons (six in the case of four groups). So the one on the first row compares group B with group A, the first on the second row compares group C with group A, etc.).
+
+The upper number for each comparison is Dunn's pairwise z test statistic. The lower number is in this example the raw p-value associated with the test (i.e. you would compare to alpha/2alpha/2, although this p-value changes depending on the family-wise error rate or false discovery rate multiple comparisons adjustment option. For stepwise multiple comparison adjustments (e.g. Holm, Benjamini-Hochberg, etc.), the adjusted p-values will have an asterisk next to them if your would reject the null hypotheses at the specified significance level (which is not necessarily directly indicated by the adjusted p-values since rejection depends on ordering... see the documentation and citations therein for more details.).
+
+I am the author of this package (emailing me, as explicitly indicated in the documentation, would likely be the best way to get in touch with me directly).
+
+```{r NowWithStars}
+ggplot(data=iris, aes(x=Species, y=Sepal.Length)) + geom_boxplot() + geom_point(aes(colour = Species), position = position_jitter(width = 0.2)) + theme_minimal() + annotate("text",x=1.5,y=8.25,label="*****", size = 6)+ annotate("text",x=2.5,y=8.25,label="****", size = 6) + annotate("segment", x = 2.05, xend = 3, y = 8.1, yend = 8.1) + annotate("segment", x = 1, xend = 1.95, y = 8.1, yend = 8.1) + annotate("segment", x = 3, xend = 3, y = 8.0, yend = 8.1) + annotate("segment", x = 2.05, xend = 2.05, y = 8.0, yend = 8.1)  +  annotate("segment", x = 1, xend = 1, y = 8.0, yend = 8.1) +  annotate("segment", x = 1.95, xend = 1.95, y = 8.0, yend = 8.1) 
+
+
+```
+
+Now even more fancy
+```{r}
+summary(iris$Petal.Length)
+iris$Petal.Class <- cut(iris$Petal.Length,c(-Inf,1.600, 4.350, 5.100, Inf))
+ggplot(data=iris, aes(x=Sepal.Width, y=Sepal.Length)) + geom_point(aes(colour = Petal.Class), position = position_jitter(width = 0.2)) + theme_bw() + facet_grid(~Species)
+```
+
+
